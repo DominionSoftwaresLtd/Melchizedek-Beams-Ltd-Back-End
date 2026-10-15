@@ -2,36 +2,28 @@ import express from 'express';
 import crypto from 'crypto';
 import Registration from '../models/Registration.js';
 import User from '../models/User.js';
-import Programme from '../models/Programme.js';
 import { protect, authorize } from '../middleware/auth.js';
+import { sendWelcomeEmail } from '../utils/email.js';
 
 const router = express.Router();
 
-// GET /api/registrations  — admin sees all, student sees own
+// ── GET /api/registrations ────────────────────────────────────────
 router.get('/', protect, async (req, res) => {
   try {
-    let registrations;
-    if (req.user.role === 'admin') {
-      registrations = await Registration.find()
-        .populate('programme', 'title beamType')
-        .sort({ createdAt: -1 });
-    } else {
-      registrations = await Registration.find({ email: req.user.email })
-        .populate('programme', 'title beamType')
-        .sort({ createdAt: -1 });
-    }
+    const filter = req.user.role === 'admin' ? {} : { email: req.user.email };
+    const registrations = await Registration.find(filter)
+      .populate('programme', 'title beamType')
+      .sort({ createdAt: -1 });
     res.json({ success: true, count: registrations.length, data: registrations });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// POST /api/registrations  — public: submit enrollment application
+// ── POST /api/registrations  (public — anyone can apply) ──────────
 router.post('/', async (req, res) => {
   try {
     const { fullName, email, phone, programmeId, programmeName, statementOfIntent } = req.body;
-
-    // Prevent duplicate pending applications for same programme
     const existing = await Registration.findOne({
       email: email.toLowerCase(),
       programme: programmeId,
@@ -47,17 +39,11 @@ router.post('/', async (req, res) => {
     }
 
     const registration = await Registration.create({
-      fullName,
-      email: email.toLowerCase(),
-      phone,
-      programme: programmeId,
-      programmeName,
-      statementOfIntent,
+      fullName, email: email.toLowerCase(), phone,
+      programme: programmeId, programmeName, statementOfIntent,
     });
-
     res.status(201).json({
-      success: true,
-      data: registration,
+      success: true, data: registration,
       message: 'Application submitted! The admin will review and contact you shortly.',
     });
   } catch (err) {
@@ -65,20 +51,20 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PATCH /api/registrations/:id/approve  — admin: approve + create student account
+// ── PATCH /api/registrations/:id/approve  (admin) ────────────────
 router.patch('/:id/approve', protect, authorize('admin'), async (req, res) => {
   try {
     const registration = await Registration.findById(req.params.id).populate('programme');
     if (!registration)
       return res.status(404).json({ success: false, message: 'Registration not found' });
-
     if (registration.status === 'Approved')
       return res.status(400).json({ success: false, message: 'Already approved' });
 
-    // Generate a temporary password
-    const tempPassword = crypto.randomBytes(5).toString('hex'); // e.g. "a3f9c2b4e1"
+    // Generate a friendly temp password: first part of email + sequential number
+    const emailPrefix = registration.email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
+    const seq = Math.floor(100 + Math.random() * 900); // 3 digits
+    const tempPassword = `${emailPrefix}@${seq}`;
 
-    // Create or find student user account
     let studentUser = await User.findOne({ email: registration.email });
     if (!studentUser) {
       studentUser = await User.create({
@@ -92,7 +78,6 @@ router.patch('/:id/approve', protect, authorize('admin'), async (req, res) => {
       });
     }
 
-    // Add programme to student's progress tracker
     const alreadyEnrolled = studentUser.progress.some(
       (p) => p.programmeId?.toString() === registration.programme?._id?.toString()
     );
@@ -105,14 +90,25 @@ router.patch('/:id/approve', protect, authorize('admin'), async (req, res) => {
       await studentUser.save();
     }
 
-    // Update registration status
     registration.status = 'Approved';
     await registration.save();
 
+    // Send welcome email with credentials
+    try {
+      await sendWelcomeEmail({
+        name: registration.fullName,
+        email: registration.email,
+        tempPassword,
+        programmeName: registration.programmeName,
+      });
+    } catch (emailErr) {
+      console.warn('Email send failed (credentials still created):', emailErr.message);
+    }
+
     res.json({
       success: true,
-      message: `Approved. Student account ready.`,
-      tempPassword, // in production, email this to the student
+      message: `Approved. Student account created. Temp password: ${tempPassword}`,
+      tempPassword,
       studentId: studentUser._id,
       data: registration,
     });
@@ -121,13 +117,12 @@ router.patch('/:id/approve', protect, authorize('admin'), async (req, res) => {
   }
 });
 
-// PATCH /api/registrations/:id/reject  — admin
+// ── PATCH /api/registrations/:id/reject  (admin) ─────────────────
 router.patch('/:id/reject', protect, authorize('admin'), async (req, res) => {
   try {
     const registration = await Registration.findById(req.params.id);
     if (!registration)
       return res.status(404).json({ success: false, message: 'Registration not found' });
-
     registration.status = 'Rejected';
     await registration.save();
     res.json({ success: true, message: 'Registration rejected.', data: registration });

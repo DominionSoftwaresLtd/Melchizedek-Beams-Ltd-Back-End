@@ -1,63 +1,36 @@
 import mongoose from 'mongoose';
 
 const articleSchema = new mongoose.Schema({
-  title: {
+  title: { type: String, required: [true, 'Please add an article title'], trim: true },
+  slug:  { type: String, unique: true },
+  type: {
     type: String,
-    required: [true, 'Please add an article title'],
-    trim: true,
-  },
-  slug: {
-    type: String,
-    unique: true,
+    enum: ['Article', 'Devotional', 'Event'],
+    default: 'Article',
   },
   category: {
     type: String,
     required: true,
-    enum: ['Announcements', 'Study Notes', 'Devotionals', 'Discipleship Insights'],
+    enum: ['Announcements', 'Study Notes', 'Devotionals', 'Discipleship Insights', 'Events'],
   },
-  author: {
-    type: String,
-    required: true,
-  },
-  readTime: {
-    type: String,
-    default: '5 min',
-  },
-  featuredImage: {
-    type: String,
-    default: '/images/articles/default.jpg',
-  },
-  summary: {
-    type: String,
-    required: true,
-  },
-  content: {
-    type: String,
-    required: true,
-  },
-  published: {
-    type: Boolean,
-    default: false,
-  },
-  views: {
-    type: Number,
-    default: 0,
-  },
-}, {
-  timestamps: true,
-});
+  author:       { type: String, required: true },
+  readTime:     { type: String, default: '5 min' },
+  featuredImage:{ type: String, default: '/images/articles/default.jpg' },
+  summary:      { type: String, required: true },
+  content:      { type: String, required: true },
+  // Event-specific fields
+  eventDate:    { type: Date },
+  eventVenue:   { type: String },
+  published:    { type: Boolean, default: false },
+  views:        { type: Number, default: 0 },
+}, { timestamps: true });
 
-// Create slug from title before saving
-articleSchema.pre('save', function(next) {
+articleSchema.pre('save', function (next) {
   if (!this.slug) {
-    this.slug = this.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '');
+    this.slug = this.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   }
   next();
 });
 
 const Article = mongoose.model('Article', articleSchema);
-
 export default Article;

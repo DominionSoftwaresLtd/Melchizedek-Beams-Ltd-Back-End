@@ -47,6 +47,7 @@ app.use('/api/testimonials',  testimonialRoutes);
 app.use('/api/registrations', registrationRoutes);
 app.use('/api/contact',       contactRoutes);
 app.use('/api/donations',     donationRoutes);
+app.use('/api/mpesa',         donationRoutes); // Daraja callback alias
 app.use('/api/resources',     resourceRoutes);
 app.use('/api/auth',          authRoutes);
 app.use('/api/students',      studentRoutes);
