@@ -1,98 +1,73 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import User from '../models/User.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// @route   POST /api/auth/register
-// @desc    Register a new user
-// @access  Public (should be protected in production)
-router.post('/register', async (req, res) => {
-  try {
-    const { name, email, password, role } = req.body;
+const signToken = (id) =>
+  jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '30d' });
 
-    // Check if user already exists
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ success: false, message: 'User already exists' });
-    }
-
-    // Create user
-    const user = await User.create({ name, email, password, role });
-
-    // Generate token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRE,
-    });
-
-    res.status(201).json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
+const userResponse = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  mustChangePassword: user.mustChangePassword,
 });
 
-// @route   POST /api/auth/login
-// @desc    Login user
-// @access  Public
+// POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ success: false, message: 'Please provide email and password' });
 
-    // Validate email & password
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Please provide an email and password' });
-    }
-
-    // Check for user
-    const user = await User.findOne({ email }).select('+password');
-    if (!user) {
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+    if (!user || !(await user.matchPassword(password)))
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
 
-    // Check if password matches
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-
-    // Generate token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRE,
-    });
-
-    res.json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: true, token: signToken(user._id), user: userResponse(user) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// @route   GET /api/auth/me
-// @desc    Get current logged in user
-// @access  Private
-router.get('/me', async (req, res) => {
+// POST /api/auth/register  (admin only in production — used by seed)
+router.post('/register', async (req, res) => {
   try {
-    // This route would need authentication middleware in production
-    res.json({ success: true, message: 'Protected route - implement auth middleware' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    const { name, email, password, role } = req.body;
+    if (await User.findOne({ email: email.toLowerCase() }))
+      return res.status(400).json({ success: false, message: 'User already exists' });
+
+    const user = await User.create({ name, email, password, role: role || 'student' });
+    res.status(201).json({ success: true, token: signToken(user._id), user: userResponse(user) });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/auth/me
+router.get('/me', protect, async (req, res) => {
+  const user = await User.findById(req.user._id).populate('progress.programmeId', 'title');
+  res.json({ success: true, user });
+});
+
+// PATCH /api/auth/change-password
+router.patch('/change-password', protect, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id).select('+password');
+    if (!(await user.matchPassword(currentPassword)))
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    await user.save();
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
